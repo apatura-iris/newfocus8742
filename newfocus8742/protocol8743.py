@@ -25,7 +25,7 @@ class NewFocus8743Protocol(NewFocus8742Protocol):
                2 Move to absolute zero position """)
 
     get_absolute_position_search_mode = _make_ask("AD?",
-            """Absolute position search state query.                                  
+            """Absolute position search state query.
                                
             This command is used to query the state of absolute position search process for an axis.""")
 
