@@ -5,22 +5,39 @@ logger = logging.getLogger(__name__)
 
 
 def _make_do(cmd, doc=None):
-    def f(self, xx=None, *nn):
-        self.do(cmd, xx, *nn)
-    if doc is not None:
-        f.__doc__ = doc
-    return f
-
-
-def _make_ask(cmd, doc=None, conv=int):
-    assert cmd.endswith("?")
     async def f(self, xx=None, *nn):
-        ret = await self.ask(cmd, xx, *nn)
-        ret = conv(ret)
-        return ret
+        await self.do_check(cmd, xx, *nn)
     if doc is not None:
         f.__doc__ = doc
     return f
+
+
+def _make_ask(cmd, doc=None, conv=int, check=True):
+    assert cmd.endswith("?")
+    if check:
+        async def f(self, xx=None, *nn):
+            ret = await self.ask_check(cmd, xx, *nn)
+            ret = conv(ret)
+            return ret
+    else:
+        async def f(self, xx=None, *nn):
+            ret = await self.ask(cmd, xx, *nn)
+            ret = conv(ret)
+            return ret
+    if doc is not None:
+        f.__doc__ = doc
+    return f
+
+
+def parse_error(msg):
+    error, code = msg.split(",")
+    return int(error), code.strip()
+
+
+class NewFocusError(Exception):
+    def __init__(self, code, message):
+        self.code = code
+        super(NewFocusError, self).__init__(message)
 
 
 class NewFocus8742Protocol:
@@ -57,6 +74,24 @@ class NewFocus8742Protocol:
         logger.debug("do %s", cmd)
         self._writeline(cmd)
 
+    async def do_check(self, cmd, xx=None, *nn):
+        """Format and send a command to the device and check for error in same command
+
+        See Also:
+            :meth:`fmt_cmd`: for the formatting and additional
+                parameters.
+        """
+        cmd = self.fmt_cmd(cmd, xx, *nn)
+        cmd += ";TB?"
+        assert len(cmd) < 64
+        logger.debug("do_check %s", cmd)
+        self._writeline(cmd)
+        ret = await self._readline()
+        logger.debug("ret %s", ret)
+        code, message = parse_error(ret)
+        if code != 0:
+            raise NewFocusError(code, message)
+
     async def ask(self, cmd, xx=None, *nn):
         """Execute a command and return a response.
 
@@ -70,6 +105,26 @@ class NewFocus8742Protocol:
         self.do(cmd, xx, *nn)
         ret = await self._readline()
         logger.debug("ret %s", ret)
+        return ret
+
+    async def ask_check(self, cmd, xx=None, *nn):
+        """Execute a command and return a response.
+
+        The command needs to include the final question mark.
+
+        See Also:
+            :meth:`fmt_cmd`: for the formatting and additional
+                parameters.
+        """
+        assert cmd.endswith("?")
+        cmd += ";TB?"
+        self.do(cmd, xx, *nn)
+        ret = await self._readline()
+        logger.debug("ret %s", ret)
+        ret, error = ret.split(";")
+        code, message = parse_error(error)
+        if code != 0:
+            raise NewFocusError(code, message)
         return ret
 
     def _writeline(self, cmd):
@@ -169,7 +224,7 @@ class NewFocus8742Protocol:
     done = _make_ask("MD?",
             """Motion done query.
 
-            This command is used to query the motion status for an axis.""")
+            This command is used to query the motion status for an axis.""", bool)
 
     move = _make_do("MV",
             """Indefinite move.
@@ -287,7 +342,7 @@ class NewFocus8742Protocol:
             ten(10) elements deep. When an error is read using TB or TE, the
             controller returns the last error that occurred and the error
             buffer is cleared by one(1) element. This means that an error can
-            be read only once, with either command.""", conv=str)
+            be read only once, with either command.""", conv=str, check=False)
 
     error_code = _make_ask("TE?",
             """Get Error code.
@@ -300,7 +355,7 @@ class NewFocus8742Protocol:
             a FIFO buffer ten(10) elements deep. When an error is read using TB
             or TE, the controller returns the last error that occurred and the
             error buffer is cleared by one(1) element. This means that an error
-            can be read only once, with either command.""")
+            can be read only once, with either command.""", check=False)
 
     async def finish(self, xx=None):
         while not await self.done(xx):
